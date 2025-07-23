@@ -1,0 +1,82 @@
+from keras.preprocessing import image
+from PIL import Image
+
+# path to test-image
+img_path = 'grumpy_baby.jpg'
+output_path = 'processed_grumpy_baby.jpg'
+
+def preprocess_and_save_img(image_path, output_path, target_size=(64,64)):
+    img = Image.open(image_path)
+    img = img.convert('L')
+    img = img.resize(target_size)
+    img_array = np.array(img)
+    img_array = img_array / 255.0
+    img = Image.fromarray((img_array * 255).astype(np.uint8))
+    img.save(output_path)
+    
+# preprocess and save image
+preprocess_and_save_img(img_path, output_path)
+
+# load pretrained model
+model = load_model('emotion_recognition_model.keras')
+
+# initialisation with dummy input
+dummy_input = tf.zeros((1, 64, 64, 1))
+model.predict(dummy_input)
+
+
+def generate_saliency_map(image_path, model, layer_name=None):
+    # load and preprocess img
+    img = image.load_img(image_path, target_size=(64, 64), color_mode='grayscale') 
+    x = image.img_to_array(img)
+    x = np.expand_dims(x, axis=0)
+    x = np.expand_dims(x, axis=-1)
+    x = x / 255.0
+    
+    model.predict(x)  
+    
+    # if no specific layer is given use the last convolutional layer
+    if layer_name is None:
+        for layer in reversed(model.layers):
+            if isinstance(layer, tf.keras.layers.Conv2D):
+                layer_name = layer.name
+                break
+
+    # create a model which returns the layer
+    layer_output = model.get_layer(layer_name).output
+    intermediate_model = tf.keras.models.Model(inputs=model.input, outputs=layer_output)
+
+    # prediction and choosing the class with the highest accuracy
+    preds = model.predict(x)
+    class_idx = np.argmax(preds[0])
+
+    # calc saliency map
+    with tf.GradientTape() as tape:
+        tape.watch(x)
+        pred = intermediate_model(x)
+        loss = tf.reduce_mean(pred[:, :, :, class_idx])
+
+    grads = tape.gradient(loss, x)
+    saliency_map = np.max(np.abs(grads), axis=-1)[0]
+    
+    #normalizing the saliency map
+    saliency_map = (saliency_map - saliency_map.min()) / (saliency_map.max() - saliency_map.min())
+    
+    return img, saliency_map
+
+# generating saliency map
+img, saliency_map = generate_saliency_map(output_path, model)
+
+# show original and saliency map
+plt.figure(figsize=(12, 6))
+plt.subplot(1, 2, 1)
+plt.imshow(img, cmap='gray')
+plt.title('Original Image')
+plt.axis('off')
+
+plt.subplot(1, 2, 2)
+plt.imshow(saliency_map, cmap='hot')
+plt.title('Saliency Map')
+plt.axis('off')
+
+plt.show()
